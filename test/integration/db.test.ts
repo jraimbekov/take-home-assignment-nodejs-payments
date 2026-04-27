@@ -1,72 +1,99 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { Pool } from 'pg';
-import { createPool } from '../../src/db/pool.js';
+import { DataSource } from 'typeorm';
+import { Commission } from '../../src/entities/Commission.js';
+import { Allocation } from '../../src/entities/Allocation.js';
 import { TEST_DATABASE_URL } from './helpers.js';
 
 /**
- * Verifies the `pg.Pool` factory can be constructed against the
- * Docker-Compose-provided database and that the seeded schema is reachable.
+ * Verifies the TypeORM DataSource can connect to the Docker-Compose-provided
+ * database and that the seeded schema with Commission and Allocation entities
+ * is reachable.
  *
  * Per the assignment, integration tests run against a real database — no
  * mocking of the DB layer.
  */
-describe('database pool', () => {
-  let pool: Pool;
+describe('database with typeorm', () => {
+  let dataSource: DataSource;
 
-  beforeAll(() => {
-    pool = createPool({ connectionString: TEST_DATABASE_URL });
+  beforeAll(async () => {
+    dataSource = new DataSource({
+      type: 'postgres',
+      url: TEST_DATABASE_URL,
+      entities: [Commission, Allocation],
+      synchronize: false,
+      logging: false,
+    });
+    await dataSource.initialize();
   });
 
   afterAll(async () => {
-    await pool.end();
+    if (dataSource?.isInitialized) {
+      await dataSource.destroy();
+    }
   });
 
-  it('runs a trivial query', async () => {
-    const res = await pool.query<{ ok: number }>('SELECT 1::int AS ok');
-    expect(res.rows[0]).toEqual({ ok: 1 });
+  it('initializes and connects to the database', async () => {
+    expect(dataSource.isInitialized).toBe(true);
   });
 
   it('reaches the seeded schema (commissions and allocations contain rows)', async () => {
-    const res = await pool.query<{ commissions: number; allocations: number }>(`
-      SELECT
-        (SELECT COUNT(*) FROM commissions)  AS commissions,
-        (SELECT COUNT(*) FROM allocations)  AS allocations
-    `);
-    const row = res.rows[0];
-    expect(typeof row?.commissions).toBe('number');
-    expect(typeof row?.allocations).toBe('number');
-    expect(row?.commissions).toBeGreaterThan(0);
-    expect(row?.allocations).toBeGreaterThan(0);
+    const commissionRepo = dataSource.getRepository(Commission);
+    const allocationRepo = dataSource.getRepository(Allocation);
+
+    const commissionCount = await commissionRepo.count();
+    const allocationCount = await allocationRepo.count();
+
+    expect(typeof commissionCount).toBe('number');
+    expect(typeof allocationCount).toBe('number');
+    expect(commissionCount).toBeGreaterThan(0);
+    expect(allocationCount).toBeGreaterThan(0);
   });
 
-  it('returns commission.total_cents as a positive integer JS number (BIGINT parser)', async () => {
-    const res = await pool.query<{ total_cents: number }>(
-      'SELECT total_cents FROM commissions LIMIT 1',
-    );
-    const v = res.rows[0]?.total_cents;
-    expect(typeof v).toBe('number');
-    expect(Number.isInteger(v)).toBe(true);
-    expect(v).toBeGreaterThan(0);
+  it('loads Commission entity with total_cents as a positive integer JS number (BIGINT transformer)', async () => {
+    const commissionRepo = dataSource.getRepository(Commission);
+    const [commission] = await commissionRepo.find({ take: 1 });
+
+    expect(commission).toBeDefined();
+    expect(typeof commission?.totalCents).toBe('number');
+    expect(Number.isInteger(commission?.totalCents)).toBe(true);
+    expect(commission?.totalCents).toBeGreaterThan(0);
   });
 
-  it('returns allocation.amount_cents as a positive integer JS number (BIGINT parser)', async () => {
-    const res = await pool.query<{ amount_cents: number }>(
-      'SELECT amount_cents FROM allocations LIMIT 1',
-    );
-    const v = res.rows[0]?.amount_cents;
-    expect(typeof v).toBe('number');
-    expect(Number.isInteger(v)).toBe(true);
-    expect(v).toBeGreaterThan(0);
+  it('loads Allocation entity with amount_cents as a positive integer JS number (BIGINT transformer)', async () => {
+    const allocationRepo = dataSource.getRepository(Allocation);
+    const [allocation] = await allocationRepo.find({ take: 1 });
+
+    expect(allocation).toBeDefined();
+    expect(typeof allocation?.amountCents).toBe('number');
+    expect(Number.isInteger(allocation?.amountCents)).toBe(true);
+    expect(allocation?.amountCents).toBeGreaterThan(0);
   });
 
-  it('returns allocation.percentage as a JS number in (0, 1] (NUMERIC parser)', async () => {
-    const res = await pool.query<{ p: number }>(
-      'SELECT percentage AS p FROM allocations LIMIT 1',
-    );
-    const p = res.rows[0]?.p;
-    expect(typeof p).toBe('number');
-    expect(p).toBeGreaterThan(0);
-    expect(p).toBeLessThanOrEqual(1);
+  it('loads Allocation entity with percentage as a JS number in (0, 1]', async () => {
+    const allocationRepo = dataSource.getRepository(Allocation);
+    const [allocation] = await allocationRepo.find({ take: 1 });
+
+    expect(allocation).toBeDefined();
+    expect(typeof allocation?.percentage).toBe('number');
+    expect(allocation?.percentage).toBeGreaterThan(0);
+    expect(allocation?.percentage).toBeLessThanOrEqual(1);
+  });
+
+  it('loads Commission with related Allocation entities via OneToMany relationship', async () => {
+    const commissionRepo = dataSource.getRepository(Commission);
+    const [commission] = await commissionRepo.find({
+      relations: ['allocations'],
+      take: 1,
+    });
+
+    expect(commission).toBeDefined();
+    expect(Array.isArray(commission?.allocations)).toBe(true);
+    expect(commission?.allocations?.length).toBeGreaterThan(0);
+
+    // Verify relationship works: each allocation references the commission
+    for (const alloc of commission?.allocations || []) {
+      expect(alloc.commissionId).toBe(commission?.id);
+    }
   });
 
   /*
@@ -75,26 +102,23 @@ describe('database pool', () => {
    * commission must equal commissions.total_cents — exactly, with no
    * float drift. This proves three things in one test:
    *   1. the JOIN works
-   *   2. BIGINT arithmetic survives our type parser without precision loss
+   *   2. BIGINT arithmetic survives our type transformer without precision loss
    *   3. the seed data we are about to assert against is internally consistent
    */
   it('allocations sum exactly to total_cents for every commission', async () => {
-    const res = await pool.query<{
-      id: string;
-      total_cents: number;
-      allocations_sum: number;
-    }>(`
-      SELECT
-        c.id,
-        c.total_cents,
-        COALESCE(SUM(a.amount_cents), 0)::bigint AS allocations_sum
-      FROM commissions c
-      LEFT JOIN allocations a ON a.commission_id = c.id
-      GROUP BY c.id
-    `);
-    expect(res.rows.length).toBeGreaterThan(0);
-    for (const row of res.rows) {
-      expect(row.allocations_sum).toBe(row.total_cents);
+    const commissionRepo = dataSource.getRepository(Commission);
+    const commissions = await commissionRepo.find({
+      relations: ['allocations'],
+    });
+
+    expect(commissions.length).toBeGreaterThan(0);
+
+    for (const commission of commissions) {
+      const allocationsSum = (commission.allocations || []).reduce(
+        (sum, alloc) => sum + alloc.amountCents,
+        0,
+      );
+      expect(allocationsSum).toBe(commission.totalCents);
     }
   });
 });
