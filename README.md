@@ -4,7 +4,7 @@ A read-only reporting API built on top of a pre-seeded PostgreSQL database of
 commissions and allocations. See [ASSIGNMENT.md](./ASSIGNMENT.md) for the
 business context and requirements.
 
-> **Status:** scaffold + DB pool wired. Reporting endpoints to follow.
+> **Status:** TypeORM entities + integration tests wired. Reporting endpoints to follow.
 
 ---
 
@@ -115,13 +115,16 @@ src/
   config/
     env.ts          # zod-validated env loader
   db/
-    pool.ts         # pg.Pool factory + BIGINT/NUMERIC type parsers
+    transformers.ts # TypeORM transformers for BIGINT/NUMERIC columns
+  entities/
+    Commission.ts   # TypeORM entity for commissions table
+    Allocation.ts   # TypeORM entity for allocations table
   server.ts         # buildApp() Fastify factory (used by tests too)
   index.ts          # process entrypoint — boots HTTP server
 test/
   integration/
     helpers.ts      # TEST_DATABASE_URL
-    db.test.ts      # real-DB pool + type-parser + invariant tests
+    db.test.ts      # TypeORM DataSource + entity loading + invariant tests
     healthcheck.test.ts
   unit/
     env.test.ts     # env loader edge cases
