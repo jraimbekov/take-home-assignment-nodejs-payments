@@ -95,6 +95,20 @@ accepted, what I changed, and what the AI got wrong.
 - **README scope.** The agent's first README was a runbook. I asked it
   to document design decisions, alternatives considered, and a "what
   I'd do with more time" section — those are explicitly evaluated.
+- **Swagger schemas inlined in route files.** The agent originally put
+  the OpenAPI/JSON-schema blobs (`querystring`, `response.200`, error
+  schemas, plus the nested `by_status` / `by_party_type` bucket trees)
+  inline at the top of each route file. That made `summary.ts` and
+  `commissions.ts` dominated by metadata and harder to read for the
+  actual handler. I extracted both blobs to `src/routes/schemas.ts`,
+  exporting `commissionsListSchema` and `summarySchema`. Also pulled
+  the shared `errorResponseSchema`, `allocationDtoSchema`, and
+  `commissionDtoSchema` building blocks into the same module so the
+  list/summary schemas reference them once instead of duplicating. The
+  route files now read top-to-bottom as "validate → call repo → shape
+  response," with the schema attached as a single named import.
+  (See `src/routes/schemas.ts`, `src/routes/commissions.ts`,
+  `src/routes/summary.ts`.)
 
 ---
 

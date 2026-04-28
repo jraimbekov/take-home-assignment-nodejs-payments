@@ -1,5 +1,5 @@
 import { Column, Entity, OneToMany, PrimaryColumn } from 'typeorm';
-import { Allocation } from './Allocation.js';
+import { Allocation } from './allocation.js';
 import { bigintToNumber } from '../db/transformers.js';
 
 /**

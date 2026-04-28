@@ -1,5 +1,5 @@
 import { Column, Entity, JoinColumn, ManyToOne, PrimaryColumn } from 'typeorm';
-import { Commission } from './Commission.js';
+import { Commission } from './commission.js';
 import { bigintToNumber, numericToNumber } from '../db/transformers.js';
 
 /**

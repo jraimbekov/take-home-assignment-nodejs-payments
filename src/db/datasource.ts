@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import { DataSource } from 'typeorm';
-import { Commission } from '../entities/Commission.js';
-import { Allocation } from '../entities/Allocation.js';
+import { Commission } from '../entities/commission.js';
+import { Allocation } from '../entities/allocation.js';
 
 export interface CreateDataSourceOptions {
   /** PostgreSQL connection URL, e.g. `postgres://user:pw@host:5432/db`. */

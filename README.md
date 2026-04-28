@@ -25,24 +25,25 @@ PostgreSQL database of commissions and allocations. See
 
 ## Run it
 
-The container path needs **only Docker** — Node, TypeORM, Fastify and
-the rest are baked into the `api` image.
-
-### Docker (recommended, zero local install)
+### Default flow (matches the assignment's "Getting Started")
 
 ```bash
-docker compose up --build       # foreground; Ctrl-C to stop
-docker compose up -d --build    # detached
+# Start PostgreSQL with seed data
+docker compose up -d
+
+# Install dependencies
+npm install
+
+# Start the dev server
+npm run dev
+
+# Run tests (in another terminal)
+npm test
 ```
 
-The compose file starts:
-
-| Service | Port | Notes |
-| ------- | ---- | ----- |
-| `db`    | 5432 | postgres:16-alpine, seeded from `db/init.sql` |
-| `api`   | 3000 | Fastify + TypeORM, runs `tsx watch` (hot-reload) |
-
-`api` waits for `db` to be `service_healthy` before starting.
+`docker compose up -d` brings up the **database only**. The `api`
+service in `docker-compose.yml` is opt-in via a profile (see below).
+`npm run dev` runs the API on the host with `tsx watch` (hot reload).
 
 ```bash
 curl -i http://localhost:3000/healthz
@@ -59,28 +60,7 @@ docker compose down       # keeps the data volume
 docker compose down -v    # also wipes pgdata; init.sql re-runs next start
 ```
 
-### Tests in the container
-
-```bash
-docker compose exec -T api npm test          # all 72 tests
-docker compose exec -T api npm run typecheck # tsc --noEmit
-```
-
-`TEST_DATABASE_URL` resolution falls back through `TEST_DATABASE_URL →
-DATABASE_URL → localhost`, so the same suite runs on host and in
-container with no env plumbing.
-
-### Host-side dev (optional)
-
-```bash
-docker compose up -d db
-npm install
-cp .env.example .env
-npm run dev    # tsx watch
-npm test
-```
-
-`.env`:
+`.env` (copy from `.env.example`):
 
 | Var            | Default                                                          |
 | -------------- | ---------------------------------------------------------------- |
@@ -88,6 +68,23 @@ npm test
 | `PORT`         | `3000`                                                           |
 | `LOG_LEVEL`    | `info`                                                           |
 | `NODE_ENV`     | `development`                                                    |
+
+### Optional: full stack in containers (zero local install)
+
+For a no-Node-on-host workflow, the `api` service runs in its own
+container. Start with the `full` profile:
+
+```bash
+docker compose --profile full up -d --build
+
+# Run tests inside the container
+docker compose exec -T api npm test
+docker compose exec -T api npm run typecheck
+```
+
+`TEST_DATABASE_URL` resolution falls back through `TEST_DATABASE_URL →
+DATABASE_URL → localhost`, so the same suite runs on host and in
+container with no env plumbing.
 
 ---
 

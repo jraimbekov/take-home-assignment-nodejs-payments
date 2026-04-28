@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { DataSource } from 'typeorm';
 import { createDataSource } from '../../src/db/datasource.js';
-import { CommissionRepository } from '../../src/repositories/CommissionRepository.js';
+import { CommissionRepository } from '../../src/repositories/commissionRepository.js';
 import { TEST_DATABASE_URL } from './helpers.js';
 
 /**

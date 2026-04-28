@@ -26,6 +26,13 @@ describe('loadEnv', () => {
     expect(env.LOG_LEVEL).toBe('info');
   });
 
+  it('falls back to the local docker DATABASE_URL when unset', () => {
+    const env = loadEnv({} as NodeJS.ProcessEnv);
+    expect(env.DATABASE_URL).toBe(
+      'postgres://commissions:commissions@localhost:5432/commissions',
+    );
+  });
+
   it('coerces PORT from string to number', () => {
     const env = loadEnv({
       DATABASE_URL: VALID_DB_URL,
@@ -33,10 +40,6 @@ describe('loadEnv', () => {
     } as NodeJS.ProcessEnv);
     expect(env.PORT).toBe(8080);
     expect(typeof env.PORT).toBe('number');
-  });
-
-  it('throws when DATABASE_URL is missing', () => {
-    expect(() => loadEnv({} as NodeJS.ProcessEnv)).toThrow(/DATABASE_URL/);
   });
 
   it('throws on invalid LOG_LEVEL', () => {

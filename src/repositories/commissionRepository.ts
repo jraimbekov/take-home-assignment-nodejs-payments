@@ -1,6 +1,6 @@
 import type { DataSource, Repository } from 'typeorm';
-import { Commission, type CommissionStatus } from '../entities/Commission.js';
-import type { AllocationType } from '../entities/Allocation.js';
+import { Commission, type CommissionStatus } from '../entities/commission.js';
+import type { AllocationType } from '../entities/allocation.js';
 import type { ListCursor } from '../domain/cursor.js';
 
 /**

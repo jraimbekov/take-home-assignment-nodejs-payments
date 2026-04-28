@@ -12,7 +12,16 @@ const EnvSchema = z.object({
   LOG_LEVEL: z
     .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
     .default('info'),
-  DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
+  /*
+   * Default points at the database brought up by `docker compose up -d`.
+   * Production is expected to set this explicitly; the default is here
+   * so the assignment's "Getting Started" flow (docker up → npm run dev)
+   * works without an extra `.env` step.
+   */
+  DATABASE_URL: z
+    .string()
+    .min(1, 'DATABASE_URL is required')
+    .default('postgres://commissions:commissions@localhost:5432/commissions'),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

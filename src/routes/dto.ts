@@ -1,8 +1,8 @@
 import type {
   Commission,
   CommissionStatus,
-} from '../entities/Commission.js';
-import type { Allocation, AllocationType } from '../entities/Allocation.js';
+} from '../entities/commission.js';
+import type { Allocation, AllocationType } from '../entities/allocation.js';
 
 /**
  * Wire-format DTOs for the commission resources.

@@ -4,7 +4,7 @@ import fastifySwaggerUi from '@fastify/swagger-ui';
 import type { DataSource } from 'typeorm';
 import { summaryRoute } from './routes/summary.js';
 import { AppError } from './domain/errors.js';
-import { CommissionRepository } from './repositories/CommissionRepository.js';
+import { CommissionRepository } from './repositories/commissionRepository.js';
 import { commissionsRoute } from './routes/commissions.js';
 
 /**

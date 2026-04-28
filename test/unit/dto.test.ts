@@ -3,8 +3,8 @@ import {
   allocationToDto,
   commissionToDto,
 } from '../../src/routes/dto.js';
-import type { Commission } from '../../src/entities/Commission.js';
-import type { Allocation } from '../../src/entities/Allocation.js';
+import type { Commission } from '../../src/entities/commission.js';
+import type { Allocation } from '../../src/entities/allocation.js';
 
 /*
  * Pure unit tests — no DB. We construct entity-shaped objects with the
