@@ -60,6 +60,13 @@ accepted, what I changed, and what the AI got wrong.
   CTE — explicitly noted as a deliberate trade-off in the README.
 - Docker Compose layout (`api` + `db`, anonymous `node_modules`
   volume, hot-reload bind mounts).
+- The recommendation **not** to refactor the summary's raw SQL into
+  TypeORM's `QueryBuilder`. The agent explained the trade-offs (zero
+  performance cost, gain type-checked property names + camelCase ↔
+  snake_case translation, but the keyset cursor in the list endpoint
+  stays raw SQL either way). I'd take that refactor in a real codebase
+  for consistency, but the current implementation is well-tested and
+  the extra abstraction wasn't worth the time today.
 
 ---
 
@@ -109,6 +116,29 @@ accepted, what I changed, and what the AI got wrong.
   response," with the schema attached as a single named import.
   (See `src/routes/schemas.ts`, `src/routes/commissions.ts`,
   `src/routes/summary.ts`.)
+- **Filename casing.** The agent picked PascalCase for files exporting
+  classes (TypeORM convention) — `Commission.ts`, `Allocation.ts`,
+  `CommissionRepository.ts`, plus the schema files
+  `CommissionsQuery.ts` / `SummaryQuery.ts`. My editor's lint flagged
+  imports with capital filenames. I had it rename every PascalCase TS
+  source file to camelCase (Node convention) and update all imports.
+  Class identifiers stay PascalCase; only filenames changed. Used the
+  two-step `git mv` trick to track the case-only renames on macOS's
+  case-insensitive filesystem.
+- **Default compose flow.** The agent put both `api` and `db` services
+  under default compose, so `docker compose up -d` started both. That
+  contradicted ASSIGNMENT.md's "Getting Started" flow, which expects
+  compose to bring up only the DB and `npm run dev` to run on the
+  host. I had it move the `api` service behind a `profiles: ["full"]`
+  profile so the assignment's exact four-command flow works as
+  written, with full-stack-in-containers available as opt-in via
+  `docker compose --profile full up -d`.
+- **DATABASE_URL default.** Once the assignment flow worked,
+  `npm run dev` still required an explicit `.env` (`loadEnv` rejected
+  missing `DATABASE_URL`). I had it add a localhost default to the
+  zod env schema (matching `.env.example`) so the four-command flow
+  works out of the box without an extra `cp .env.example .env` step.
+  Updated the env unit test to match.
 
 ---
 
@@ -129,6 +159,21 @@ accepted, what I changed, and what the AI got wrong.
   `bigintToNumber` transformer fixes it; rationale (safe within
   `Number.MAX_SAFE_INTEGER`, ~90× headroom over a trillion-USD figure
   in cents) is in `src/db/transformers.ts`.
+- **Production entrypoint missing the DataSource.** `src/index.ts`
+  originally called `buildApp()` with no options, so the running
+  container had no `commissions` repository decorator and the list
+  endpoint 500'd on first manual curl with `Cannot read properties of
+  undefined (reading 'list')`. The 72 integration tests passed
+  because every test passes `buildApp({ dataSource })` explicitly.
+  Caught only when the user manually hit the live API. Fix: index.ts
+  now loads env via `loadEnv()`, initialises a TypeORM `DataSource`,
+  passes it into `buildApp({ dataSource })`, and registers
+  `SIGINT`/`SIGTERM` handlers so Docker doesn't have to escalate to
+  `SIGKILL` on shutdown. Real testing-strategy gap: nothing in the
+  suite tests the actual entrypoint — the next iteration would add a
+  smoke test that runs against the live container, or a defensive
+  guard in `buildApp` that throws at construction time if a DB-backed
+  route would be registered without a `DataSource`.
 
 ---
 

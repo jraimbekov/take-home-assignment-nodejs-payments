@@ -348,17 +348,18 @@ src/
     dateRange.ts                   # 365-day cap + inverted-range guard
     errors.ts                      # AppError + zod mapper
   entities/
-    Commission.ts
-    Allocation.ts
+    commission.ts
+    allocation.ts
   repositories/
-    CommissionRepository.ts        # list(), summary(), find by id, count
+    commissionRepository.ts        # list(), summary(), find by id, count
   routes/
     commissions.ts                 # GET /api/v1/commissions
     summary.ts                     # GET /api/v1/commissions/summary
     dto.ts                         # entity → snake_case wire format
+    schemas.ts                     # OpenAPI/Swagger schema definitions
   schemas/
-    CommissionsQuery.ts            # zod for list params
-    SummaryQuery.ts                # zod for summary params
+    commissionsQuery.ts            # zod for list params
+    summaryQuery.ts                # zod for summary params
   server.ts                        # buildApp() Fastify factory
   index.ts                         # process entrypoint
 test/                              # see "Testing strategy"
