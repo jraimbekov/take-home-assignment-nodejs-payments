@@ -17,6 +17,6 @@ export const SummaryQuerySchema = z.object({
   start_date: isoDate('start_date'),
   end_date: isoDate('end_date'),
   team_id: z.string().uuid('team_id must be a valid UUID').optional(),
-});
+}).required({ start_date: true, end_date: true });
 
 export type SummaryQuery = z.infer<typeof SummaryQuerySchema>;

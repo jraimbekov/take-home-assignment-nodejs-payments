@@ -50,6 +50,42 @@ CREATE TABLE allocations (
 );
 
 -- -----------------------------------------------------------
+-- Indexes
+-- -----------------------------------------------------------
+-- These indexes back the access patterns used by the reporting API.
+-- See README "Query approach and indexes" for the rationale per index.
+--
+--   1. (close_date DESC, id DESC) — primary list ordering AND the
+--      keyset cursor comparison `(close_date, id) < (cursor.closeDate,
+--      cursor.id)`. This is the index every list-page request hits.
+--
+--   2. (team_id, close_date DESC) — most common filtered list shape
+--      ("a team's recent commissions"). Composite leads with team_id
+--      because it is highly selective; close_date narrows within the
+--      team and supports range scans.
+--
+--   3. (status) — low cardinality (4 values) but useful when status is
+--      the only filter, and cheap.
+--
+--   4. (commission_id) on allocations — required for the eager-loading
+--      JOIN in the list and the summary's INNER JOIN by commission_id.
+--      Postgres does NOT auto-index referencing columns of foreign keys,
+--      so this is a real correctness/perf concern, not a hint.
+-- -----------------------------------------------------------
+
+CREATE INDEX idx_commissions_close_date_id
+  ON commissions (close_date DESC, id DESC);
+
+CREATE INDEX idx_commissions_team_close_date
+  ON commissions (team_id, close_date DESC);
+
+CREATE INDEX idx_commissions_status
+  ON commissions (status);
+
+CREATE INDEX idx_allocations_commission_id
+  ON allocations (commission_id);
+
+-- -----------------------------------------------------------
 -- Reusable IDs
 -- -----------------------------------------------------------
 

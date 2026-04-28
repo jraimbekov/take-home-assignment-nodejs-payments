@@ -137,18 +137,62 @@ and clarify with the user before coding.
 ## API design
 
 - **One error shape**: `{ code, message, details? }`. `code` is a stable
-  string constant (`VALIDATION_ERROR`, `NOT_FOUND`, `INTERNAL_ERROR`). Do not
-  leak raw DB errors or stack traces.
+  snake_case string constant (`invalid_parameter`, `missing_parameter`,
+  `range_too_large`, `not_found`, `internal_server_error`). Do not leak raw
+  DB errors or stack traces.
 - **HTTP semantics** matter:
   - 200 — success (including empty results)
-  - 400 — validation failure
+  - 400 — validation failure (parse error, missing required field, bad enum)
+  - 422 — semantically rejected by a business rule (e.g. range > 365 days)
   - 404 — resource genuinely missing (use sparingly; an empty list isn't a 404)
-  - 500 — unexpected server error
+  - 500 — unexpected server error (opaque; log details server-side)
 - **Empty results aren't errors.** A period summary with no matching commissions
   returns zeros for every bucket, not a 404. The assignment is explicit about
   this.
-- **Validate inputs at the route boundary** with zod. Reject early, return a
-  helpful `details` payload listing every invalid field.
+- **Validate inputs at the route boundary** with zod. Reject early.
+- **Pagination** uses keyset cursors (opaque base64url JSON). Stable
+  under inserts. Never offset/limit at scale.
+
+---
+
+## Validation: zod is the single source of truth
+
+- **Zod inside the handler**, not Fastify's Ajv schema. Why: Fastify's
+  built-in validator returns its own error shape that bypasses our
+  `AppError` mapping, producing `500` instead of `400`.
+- Keep Fastify route `schema:` blocks **for `@fastify/swagger`
+  documentation only**. Set `app.setValidatorCompiler(() => () => true)`
+  to no-op the runtime validator.
+- One source for the contract per endpoint: a zod schema. The Fastify
+  schema is hand-mirrored for swagger; if drift becomes painful, switch
+  to `fastify-type-provider-zod` to derive both from one source.
+
+---
+
+## Logging
+
+- Pino is the logger (Fastify default). It writes structured JSON to
+  stdout — pipe to `pino-pretty` in dev and to any aggregator in prod.
+- Use Fastify lifecycle hooks (`onRequest`, `onResponse`, `onError`)
+  for cross-cutting log lines — those *are* the interceptor pattern.
+  Do not add a custom interceptor class.
+- **Never log secrets.** Configure `redact` on pino if any are added.
+- Test mode silences the logger via `NODE_ENV=test`.
+
+---
+
+## Decorator vs controller layering
+
+- **Default: Fastify plugins + `app.decorate(...)`**. Repositories
+  decorate the app once at boot; route handlers reference
+  `fastify.commissions` (not `new` per request).
+- **Don't add a controller / service class** unless a single endpoint
+  has substantial orchestration (auth → fetch → transform → side-effect
+  → response). For read-only reporting, "controller" and "service"
+  layers would be one-line passthroughs — explicit YAGNI.
+- At scale (~30+ endpoints), encapsulate per feature with Fastify
+  plugins (`app.register(commissionsPlugin, { prefix: '/api/v1/commissions' })`).
+  Plugins, not controllers, are the scaling primitive.
 
 ---
 

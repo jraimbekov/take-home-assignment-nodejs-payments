@@ -1,6 +1,29 @@
 import type { DataSource, Repository } from 'typeorm';
 import { Commission, type CommissionStatus } from '../entities/Commission.js';
 import type { AllocationType } from '../entities/Allocation.js';
+import type { ListCursor } from '../domain/cursor.js';
+
+/**
+ * Filters and pagination accepted by `list()`.
+ *
+ * Date range, team, and status are independent — any subset can be
+ * provided. `limit` is required (the route schema fills in the default).
+ * `cursor`, when present, narrows results to "rows ordered after this
+ * tuple" (see `ListCursor` for the keyset semantics).
+ */
+export interface ListFilters {
+  startDate?: string;
+  endDate?: string;
+  teamId?: string;
+  status?: CommissionStatus;
+  cursor?: ListCursor;
+  limit: number;
+}
+
+export interface ListResult {
+  commissions: Commission[];
+  hasMore: boolean;
+}
 
 /**
  * Filters accepted by the period-summary aggregation.
@@ -102,6 +125,71 @@ export class CommissionRepository {
       where: { id },
       relations: { allocations: true },
     });
+  }
+
+  /**
+   * Page of commissions matching the supplied filters, with allocations
+   * eager-loaded.
+   *
+   * Sort order is `(close_date DESC, id DESC)` — most recent first, with
+   * `id` as the deterministic tiebreaker for keyset pagination.
+   *
+   * Pagination strategy: keyset cursor. We fetch `limit + 1` rows; if the
+   * extra row exists, `hasMore` is `true` and the route handler exposes
+   * the last in-page row as `next_cursor`. This is stable under concurrent
+   * inserts and avoids the ever-growing `OFFSET` cost.
+   *
+   * Index path: `idx_commissions_close_date_id` (composite) — see the
+   * EXPLAIN integration test that asserts the plan uses the index.
+   */
+  async list(filters: ListFilters): Promise<ListResult> {
+    const qb = this.repo
+      .createQueryBuilder('c')
+      .leftJoinAndSelect('c.allocations', 'a');
+
+    if (filters.startDate) {
+      qb.andWhere('c.close_date >= :startDate', {
+        startDate: filters.startDate,
+      });
+    }
+    if (filters.endDate) {
+      qb.andWhere('c.close_date <= :endDate', {
+        endDate: filters.endDate,
+      });
+    }
+    if (filters.teamId) {
+      qb.andWhere('c.team_id = :teamId', { teamId: filters.teamId });
+    }
+    if (filters.status) {
+      qb.andWhere('c.status = :status', { status: filters.status });
+    }
+    if (filters.cursor) {
+      // Tuple comparison gives the right keyset semantics with one
+      // expression: `(a, b) < (x, y)` is `a < x OR (a = x AND b < y)`.
+      qb.andWhere(
+        '(c.close_date, c.id) < (:cursorCloseDate::date, :cursorId::uuid)',
+        {
+          cursorCloseDate: filters.cursor.closeDate,
+          cursorId: filters.cursor.id,
+        },
+      );
+    }
+
+    // Note: orderBy must use the *entity property* path (`closeDate`),
+    // not the DB column name. Using the column name here triggers a
+    // TypeORM bug ("Cannot read properties of undefined (reading
+    // 'databaseName')") inside its DISTINCT-injection pass when joining
+    // a one-to-many relation and applying `take()`.
+    qb.orderBy('c.closeDate', 'DESC').addOrderBy('c.id', 'DESC');
+    // Fetch one extra so the caller can detect "is there another page".
+    qb.take(filters.limit + 1);
+
+    const rows = await qb.getMany();
+    const hasMore = rows.length > filters.limit;
+    return {
+      commissions: hasMore ? rows.slice(0, filters.limit) : rows,
+      hasMore,
+    };
   }
 
   /**
