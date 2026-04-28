@@ -16,5 +16,31 @@ services:
       timeout: 3s
       retries: 5
 
+  api:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      # Note: hostname is `db` (the compose service name), not `localhost` —
+      # `localhost` inside the api container would be the api container itself.
+      DATABASE_URL: postgres://commissions:commissions@db:5432/commissions
+      PORT: "3000"
+      LOG_LEVEL: info
+      NODE_ENV: development
+    volumes:
+      # Bind-mount source for hot-reload via `tsx watch`. Editing files on
+      # the host triggers a restart inside the container.
+      - ./src:/app/src
+      - ./test:/app/test
+      - ./tsconfig.json:/app/tsconfig.json
+      - ./vitest.config.ts:/app/vitest.config.ts
+      # Anonymous volume keeps the image's `/app/node_modules` from being
+      # shadowed by the host's (which may be missing or built for a
+      # different OS/arch).
+      - /app/node_modules
+
 volumes:
   pgdata:

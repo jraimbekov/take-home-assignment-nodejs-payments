@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { DataSource } from 'typeorm';
+import type { DataSource } from 'typeorm';
+import { createDataSource } from '../../src/db/datasource.js';
 import { Commission } from '../../src/entities/Commission.js';
 import { Allocation } from '../../src/entities/Allocation.js';
 import { TEST_DATABASE_URL } from './helpers.js';
@@ -16,13 +17,7 @@ describe('database with typeorm', () => {
   let dataSource: DataSource;
 
   beforeAll(async () => {
-    dataSource = new DataSource({
-      type: 'postgres',
-      url: TEST_DATABASE_URL,
-      entities: [Commission, Allocation],
-      synchronize: false,
-      logging: false,
-    });
+    dataSource = createDataSource({ url: TEST_DATABASE_URL });
     await dataSource.initialize();
   });
 

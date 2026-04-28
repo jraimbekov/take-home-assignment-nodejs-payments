@@ -3,16 +3,14 @@ import { Commission } from './Commission.js';
 import { bigintToNumber, numericToNumber } from '../db/transformers.js';
 
 /**
- * Allocation party type.
+ * Party that participated in a commission split.
  *
- * Mirrors the `allocations.party_type` CHECK constraint defined in `db/init.sql`.
- * Represents the different types of recipients for commission allocations.
+ * Mirrors the `allocations.party_type` CHECK constraint defined in
+ * `db/init.sql`. ASSIGNMENT.md additionally lists a `'team'` value, but the
+ * actual schema constraint only allows the three below — the schema is the
+ * source of truth, and this discrepancy is documented in the README.
  */
-export type AllocationType =
-  | 'team_member'
-  | 'team'
-  | 'external_agent'
-  | 'brokerage';
+export type AllocationType = 'team_member' | 'external_agent' | 'brokerage';
 
 /**
  * An allocation record representing a portion of a commission distributed to a party.

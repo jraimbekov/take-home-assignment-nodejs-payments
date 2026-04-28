@@ -4,75 +4,49 @@ A read-only reporting API built on top of a pre-seeded PostgreSQL database of
 commissions and allocations. See [ASSIGNMENT.md](./ASSIGNMENT.md) for the
 business context and requirements.
 
-> **Status:** TypeORM entities + integration tests wired. Reporting endpoints to follow.
+> **Status:** TypeORM entities, `CommissionRepository`, and Dockerized API
+> service wired. Reporting endpoints to follow.
 
 ---
 
 ## Prerequisites
 
-- **Node.js** 18+ (developed on 25 — any modern LTS works)
+The container path needs **only Docker** — Node, TypeORM, Fastify and the
+rest of the stack are baked into the `api` image.
+
 - **Docker** with the `docker compose` plugin (Docker Desktop or Colima)
-- **npm** 9+ (ships with Node 18+)
+
+Optional (for host-side development):
+
+- **Node.js** 18+ and **npm** 9+
 
 Verify:
 ```bash
-node --version
-npm --version
 docker compose version
+node --version    # only if running on host
 ```
 
 ---
 
-## Getting started
+## Getting started — Docker (recommended, zero local install)
 
-### 1. Start the database
-
-The database container ships seed data via `db/init.sql` — schema + 25
-commissions and 65 allocations across three teams over Jan–Apr 2025.
+`docker compose up` builds the API image and starts both services.
 
 ```bash
-docker compose up -d
-```
-
-This binds Postgres to `localhost:5432`. Credentials and database name are all
-`commissions` (see [docker-compose.yml](./docker-compose.yml)).
-
-To stop:
-```bash
-docker compose down       # keeps the data volume
-docker compose down -v    # wipes the volume; init.sql re-runs on next start
-```
-
-### 2. Install Node dependencies
-
-```bash
-npm install
-```
-
-### 3. Configure environment
-
-Copy the example file and adjust if you changed the compose defaults:
-
-```bash
-cp .env.example .env
-```
-
-Required variables:
-
-| Var            | Default                                                          | Notes |
-| -------------- | ---------------------------------------------------------------- | ----- |
-| `DATABASE_URL` | `postgres://commissions:commissions@localhost:5432/commissions`  | Used by the running service. |
-| `PORT`         | `3000`                                                           | HTTP listen port. |
-| `LOG_LEVEL`    | `info`                                                           | Pino level: `fatal`/`error`/`warn`/`info`/`debug`/`trace`/`silent`. |
-| `NODE_ENV`     | `development`                                                    | `test` silences the logger automatically. |
-
-### 4. Run the service
-
-```bash
-npm run dev      # tsx watch — auto-restarts on changes
+docker compose up --build       # foreground; Ctrl-C to stop
 # or
-npm start        # tsx — single run, no watch
+docker compose up -d --build    # detached
 ```
+
+Services:
+
+| Service | Port | Notes |
+| ------- | ---- | ----- |
+| `db`    | 5432 | postgres:16-alpine, seeded from `db/init.sql` on first start |
+| `api`   | 3000 | Fastify + TypeORM, runs `tsx watch src/index.ts` (hot-reloads on host edits) |
+
+The `api` waits for `db` to be healthy before starting (`depends_on:
+condition: service_healthy`).
 
 Smoke-test the liveness probe:
 
@@ -82,17 +56,50 @@ curl -i http://localhost:3000/healthz
 # {"status":"ok"}
 ```
 
----
-
-## Running tests
-
+Stop:
 ```bash
-npm test           # one-shot run, exits cleanly
-npm run test:watch # watch mode
-npm run typecheck  # tsc --noEmit
+docker compose down       # keeps the data volume
+docker compose down -v    # also wipes the DB volume; init.sql re-runs next start
 ```
 
-### Test layout
+### Running tests in the container
+
+```bash
+docker compose exec -T api npm test          # all tests
+docker compose exec -T api npm run typecheck # tsc --noEmit
+```
+
+The integration tests connect to `db:5432` automatically because compose
+sets `DATABASE_URL` inside the `api` container; the test helper falls back
+through `TEST_DATABASE_URL → DATABASE_URL → localhost`.
+
+---
+
+## Getting started — host-side (optional)
+
+Useful if you want native debugger attach, faster cold start, or are
+already living in the project shell.
+
+```bash
+docker compose up -d db   # only the database
+npm install
+cp .env.example .env
+npm run dev               # tsx watch
+npm test                  # vitest run
+```
+
+`.env` reads:
+
+| Var            | Default                                                          | Notes |
+| -------------- | ---------------------------------------------------------------- | ----- |
+| `DATABASE_URL` | `postgres://commissions:commissions@localhost:5432/commissions`  | Used by the running service. |
+| `PORT`         | `3000`                                                           | HTTP listen port. |
+| `LOG_LEVEL`    | `info`                                                           | Pino level: `fatal`/`error`/`warn`/`info`/`debug`/`trace`/`silent`. |
+| `NODE_ENV`     | `development`                                                    | `test` silences the logger. |
+
+---
+
+## Test layout
 
 | Path                                         | Scope        | Talks to a real DB? |
 | -------------------------------------------- | ------------ | ------------------- |
@@ -100,11 +107,8 @@ npm run typecheck  # tsc --noEmit
 | `test/integration/**.test.ts`                | HTTP + SQL   | **Yes**             |
 
 Integration tests are not mocked at the DB layer (per the assignment). They
-default to the dev DB on `:5432`. Set `TEST_DATABASE_URL` to point at a
-dedicated test database once one is added.
-
-The DB container must be running (`docker compose ps` to verify) before
-running integration tests.
+use the TypeORM `DataSource` factory in [src/db/datasource.ts](./src/db/datasource.ts)
+and assert exact values against known seed rows from `db/init.sql`.
 
 ---
 
@@ -113,47 +117,74 @@ running integration tests.
 ```
 src/
   config/
-    env.ts          # zod-validated env loader
+    env.ts                      # zod-validated env loader
   db/
-    transformers.ts # TypeORM transformers for BIGINT/NUMERIC columns
+    datasource.ts               # TypeORM DataSource factory
+    transformers.ts             # BIGINT / NUMERIC → JS number transformers
   entities/
-    Commission.ts   # TypeORM entity for commissions table
-    Allocation.ts   # TypeORM entity for allocations table
-  server.ts         # buildApp() Fastify factory (used by tests too)
-  index.ts          # process entrypoint — boots HTTP server
+    Commission.ts               # commissions table
+    Allocation.ts               # allocations table (FK -> commission_id)
+  repositories/
+    CommissionRepository.ts     # commission queries (count, findByIdWithAllocations)
+  server.ts                     # buildApp() Fastify factory
+  index.ts                      # process entrypoint
 test/
+  setup.ts                      # reflect-metadata + NODE_ENV=test
   integration/
-    helpers.ts      # TEST_DATABASE_URL
-    db.test.ts      # TypeORM DataSource + entity loading + invariant tests
+    helpers.ts                  # TEST_DATABASE_URL resolution
     healthcheck.test.ts
+    db.test.ts                  # DataSource + entity + invariant
+    commissionRepository.test.ts
   unit/
-    env.test.ts     # env loader edge cases
+    env.test.ts
 db/
-  init.sql          # schema + seed (mounted into the DB container)
+  init.sql                      # schema + seed (mounted into the db container)
+Dockerfile
+.dockerignore
 docker-compose.yml
+.claude/skills/engineering-standards/SKILL.md
 ```
+
+---
+
+## Schema vs ASSIGNMENT.md discrepancies (caught and resolved)
+
+While reading `db/init.sql` I noticed two places where the prose diverges from
+the live schema. The schema is treated as the source of truth in this code.
+
+1. **`party_type` enum.** ASSIGNMENT.md lists `'team' | 'team_member' |
+   'external_agent' | 'brokerage'`, but the actual `CHECK` constraint at
+   `db/init.sql:46` only allows three (`'team_member' | 'external_agent' |
+   'brokerage'`). The `AllocationType` union in [Allocation.ts](./src/entities/Allocation.ts)
+   matches the constraint.
+
+2. **March 2025 GCI total.** A header comment claims `5,200,000`, while the
+   evaluator-reference table further down (and the actual sum of seeded
+   rows) gives `5,220,000`. Tests will assert against the latter.
 
 ---
 
 ## Troubleshooting
 
-**`npm test` fails with a connection error.** The DB container isn't running.
-Check `docker compose ps`; if missing, `docker compose up -d`.
-
-**Port 5432 is already in use.** Either stop the conflicting service or change
-the port mapping in `docker-compose.yml` and update `DATABASE_URL`.
+**`docker compose up` fails to bind to port 5432 or 3000.** Stop the
+conflicting service or change the host port mapping in
+`docker-compose.yml`.
 
 **`commissions` table is missing rows.** The volume was created with no data
 (e.g. the container started before `init.sql` was mounted). Run
 `docker compose down -v && docker compose up -d` to recreate from seed.
 
+**`tsx watch` doesn't pick up host edits inside the container.** Make sure
+the bind mounts in `docker-compose.yml` resolve — on macOS with Colima,
+ensure the project path is inside the VM's mount root.
+
 ---
 
 ## What's next
 
-This README will grow alongside the implementation. Upcoming sections:
+Coming sections (added as endpoints land):
 
-- API reference (endpoints, query parameters, error codes, examples)
+- API reference (paths, query parameters, error codes, examples)
 - Design decisions and alternatives considered
 - Query approach and indexes added
 - Testing strategy in detail

@@ -1,3 +1,4 @@
+import 'reflect-metadata';
 import { buildApp } from './server.js';
 
 /**
