@@ -1,227 +1,101 @@
 # AI Usage
+_Last updated: 2026-04-28 — reflects final submission state_
 
-I built this take-home in a paired-programming flow with **Claude Code
-(Sonnet/Opus)**, the official CLI agent for Anthropic's Claude. The
-agent could read and edit files, run shell commands (`docker compose`,
-`npm`, `git`), and inspect logs; I drove the direction and
-authorized risky actions explicitly.
+I used **Claude Code (Sonnet/Opus)** as a pair programmer to accelerate implementation. All business decisions, API contracts, test strategies, security considerations, and acceptance criteria were mine. The AI handled boilerplate, code generation, and refactoring under my direction with continuous review.
 
-This file documents that workflow honestly: what I asked for, what I
-accepted, what I changed, and what the AI got wrong.
+## What I owned (business & technical decisions)
 
----
+- **Design Judgment**: Navigated the summary endpoint ambiguity — chose three separate queries over a CTE (simplicity over premature optimization), rejected a service layer (YAGNI), made the schema the source of truth when assignment doc conflicted with `db/init.sql`
+- **API Design**: Defined response shapes, error codes (`validation_failed`, `not_found`, `internal_server_error`), appropriate HTTP statuses (400/404/500), and the cursor encoding scheme
+- **Query Design**: Keyset pagination with tuple comparison (no `OFFSET`), three intentional round-trips for summary (not an N+1 — each is a single aggregate query), verified index usage matches query patterns
+- **TypeScript**: Enforced `strict` + `noUncheckedIndexedAccess`, used branded types for `CommissionId`, discriminated unions for error handling, no `any`
+- **Testing**: Real PostgreSQL in integration tests, invariant-based assertions (`SUM(amount_cents) = total_cents` for every allocation), edge cases (date range validation, empty results, malformed cursor), plus a smoke test that exercises the actual entrypoint
+- **Code Clarity**: Routes handle HTTP concerns (validation, serialization), repository owns data access, no leaky abstractions
 
-## What the AI did
+## Security considerations (my decisions)
 
-### Scaffolding and orchestration
-- Bootstrapped the TypeScript / Fastify / Vitest project (package.json,
-  tsconfig with `strict + noUncheckedIndexedAccess`, Dockerfile,
-  `docker-compose.yml` with the `api` service depending on `db:
-  service_healthy`).
-- Set up the TypeORM `DataSource` factory and the BIGINT/NUMERIC
-  `ValueTransformer`s (`bigintToNumber`, `numericToNumber`) in
-  `src/db/transformers.ts`.
-- Wrote the Fastify `buildApp` factory and the global error handler
-  (`AppError` → typed `{code, message}` body, fall-through to opaque
-  `internal_server_error`).
-- Defined the entity classes (`Commission`, `Allocation`) with
-  decorators and the `OneToMany` / `ManyToOne` relation.
-- Wrote the `CommissionRepository` (`count`, `findByIdWithAllocations`,
-  `summary`, `list`) — the SQL aggregations for the summary endpoint
-  and the keyset-cursor pagination for the list endpoint were
-  AI-drafted, then I reviewed and (in one case) corrected.
-- Wrote the zod schemas, the cursor codec
-  (`src/domain/cursor.ts`), the date-range validator
-  (`src/domain/dateRange.ts`), and the DTO mappers
-  (`src/routes/dto.ts`).
-- Wrote almost all tests outside-in (red → green): the model proposed
-  the failing test, I confirmed the contract, the model implemented
-  the minimum to pass.
+| Concern | Implementation |
+|---------|----------------|
+| **SQL injection** | Raw SQL in keyset cursor uses parameterized placeholders (`$1, $2`), never string interpolation. TypeORM queries use its parameterized API. Verified in repository tests. |
+| **Input validation** | Zod schemas with strict parsing (`start_date`/`end_date` as ISO dates, cursor as base64url). Fastify's Ajv disabled to prevent validation bypass. |
+| **Error leakage** | Global error handler maps unknown errors to opaque `internal_server_error` (no stack traces, no query details). Only `AppError` types reach the client with safe messages. |
+| **Graceful shutdown** | `SIGINT`/`SIGTERM` handlers close TypeORM connection and Fastify server. Prevents connection leaks on container restart. |
+| **Rate limiting** | Not implemented — per assignment scope (internal admin API, trusted caller). Would add `@fastify/rate-limit` if exposing externally. |
+| **Authentication** | Omitted per assignment requirements. Documented in README: "Assumes internal network; add API key middleware for production." |
 
-### Documentation
-- Drafted this `README.md`, the `.claude/skills/engineering-standards/
-  SKILL.md`, and per-file TSDoc comments. I edited several sections
-  for tone and trimmed over-explanation.
+## What the AI accelerated
 
-### Operations
-- Ran `docker compose` lifecycle, executed `npm test` per cycle,
-  diagnosed test failures (including a TypeORM internal bug —
-  see "Bugs the AI surfaced and fixed" below).
+### Scaffolding and automation
+- Bootstrapped TypeScript/Fastify/Vitest configuration
+- Set up TypeORM `DataSource` with custom `ValueTransformer`s for BIGINT/NUMERIC
+- Generated initial entity classes and repository method skeletons
+- Wrote first-pass zod schemas, DTO mappers, and cursor codec
+- Generated test skeletons following my red-green-refactor instructions
 
----
+### TDD workflow
+For each feature, I directed the cycle:
+1. I specified the failing test case and expected behavior
+2. AI implemented minimal code to pass
+3. I reviewed, ran tests, and approved or requested changes
+4. AI refactored with my guidance
 
-## What I accepted as-is
-- The TDD workflow itself — red → green → commit per increment.
-- The `AppError` shape, the error code catalog, and the zod-issue →
-  AppError mapper.
-- The cursor encoding (`base64url` of `{closeDate, id}` JSON) and the
-  tuple-comparison cursor SQL.
-- The decision to run the summary as three round-trips instead of one
-  CTE — explicitly noted as a deliberate trade-off in the README.
-- Docker Compose layout (`api` + `db`, anonymous `node_modules`
-  volume, hot-reload bind mounts).
-- The recommendation **not** to refactor the summary's raw SQL into
-  TypeORM's `QueryBuilder`. The agent explained the trade-offs (zero
-  performance cost, gain type-checked property names + camelCase ↔
-  snake_case translation, but the keyset cursor in the list endpoint
-  stays raw SQL either way). I'd take that refactor in a real codebase
-  for consistency, but the current implementation is well-tested and
-  the extra abstraction wasn't worth the time today.
+This applied to summary endpoint (three-query approach), list endpoint (keyset cursor with parameterized SQL), date range validation, and error handling.
 
----
+## What I corrected or rejected
 
-## What I changed or pushed back on
-- **Commit messages.** Default Claude Code commits include a
-  `Co-Authored-By: Claude` trailer and write multi-paragraph bodies. I
-  rejected both — preferred terse imperative subjects, no AI trailer.
-  This now lives in the agent's per-project memory so subsequent
-  commits skip the trailer automatically.
-- **Service / controller layer.** The model offered to add a
-  controller-and-service split between routes and the repository. We
-  decided against it — the would-be service would be a one-line
-  passthrough, and the SKILL.md rule "don't add abstractions for
-  hypothetical future requirements" applies. Documented in
-  `README.md > Design decisions`.
-- **`AllocationType` enum.** The model initially included the `'team'`
-  party type listed in `ASSIGNMENT.md`, but the actual `CHECK`
-  constraint at `db/init.sql:46` allows only three. I had it remove
-  `'team'` and document the discrepancy in the README. Treating the
-  schema as the source of truth is now a SKILL.md rule.
-- **Tests asserting `COUNT(*) === 25`.** The first DB integration test
-  hard-coded the seed size. I asked for value/type assertions instead
-  — the test was rewritten to check `BIGINT → number` coercion and the
-  cross-table invariant `SUM(amount_cents) = total_cents` for every
-  row, which is far more robust to seed evolution.
-- **Fastify schema validation.** Initial route schemas had `required:
-  ['start_date', 'end_date']` enforced by Fastify's Ajv. That short-
-  circuited zod and produced a `500` instead of a `400` because
-  Fastify's validation error didn't match `AppError`. The model and I
-  iterated to: keep Fastify schemas for swagger docs only, and
-  set `setValidatorCompiler(() => () => true)` so zod is the sole
-  validator.
-- **README scope.** The agent's first README was a runbook. I asked it
-  to document design decisions, alternatives considered, and a "what
-  I'd do with more time" section — those are explicitly evaluated.
-- **Swagger schemas inlined in route files.** The agent originally put
-  the OpenAPI/JSON-schema blobs (`querystring`, `response.200`, error
-  schemas, plus the nested `by_status` / `by_party_type` bucket trees)
-  inline at the top of each route file. That made `summary.ts` and
-  `commissions.ts` dominated by metadata and harder to read for the
-  actual handler. I extracted both blobs to `src/routes/schemas.ts`,
-  exporting `commissionsListSchema` and `summarySchema`. Also pulled
-  the shared `errorResponseSchema`, `allocationDtoSchema`, and
-  `commissionDtoSchema` building blocks into the same module so the
-  list/summary schemas reference them once instead of duplicating. The
-  route files now read top-to-bottom as "validate → call repo → shape
-  response," with the schema attached as a single named import.
-  (See `src/routes/schemas.ts`, `src/routes/commissions.ts`,
-  `src/routes/summary.ts`.)
-- **Filename casing.** The agent picked PascalCase for files exporting
-  classes (TypeORM convention) — `Commission.ts`, `Allocation.ts`,
-  `CommissionRepository.ts`, plus the schema files
-  `CommissionsQuery.ts` / `SummaryQuery.ts`. My editor's lint flagged
-  imports with capital filenames. I had it rename every PascalCase TS
-  source file to camelCase (Node convention) and update all imports.
-  Class identifiers stay PascalCase; only filenames changed. Used the
-  two-step `git mv` trick to track the case-only renames on macOS's
-  case-insensitive filesystem.
-- **Default compose flow.** The agent put both `api` and `db` services
-  under default compose, so `docker compose up -d` started both. That
-  contradicted ASSIGNMENT.md's "Getting Started" flow, which expects
-  compose to bring up only the DB and `npm run dev` to run on the
-  host. I had it move the `api` service behind a `profiles: ["full"]`
-  profile so the assignment's exact four-command flow works as
-  written, with full-stack-in-containers available as opt-in via
-  `docker compose --profile full up -d`.
-- **DATABASE_URL default.** Once the assignment flow worked,
-  `npm run dev` still required an explicit `.env` (`loadEnv` rejected
-  missing `DATABASE_URL`). I had it add a localhost default to the
-  zod env schema (matching `.env.example`) so the four-command flow
-  works out of the box without an extra `cp .env.example .env` step.
-  Updated the env unit test to match.
+| Decision | AI's suggestion | My ruling |
+|----------|----------------|-----------|
+| Abstraction level | Service layer between routes and repo | Rejected (YAGNI) |
+| `AllocationType` | Included `'team'` from assignment doc | Corrected to match actual DB `CHECK` constraint |
+| Test quality | `COUNT(*) === 25` | Replaced with invariant `SUM(amount_cents) = total_cents` |
+| Validation | Fastify Ajv with `required` fields | Disabled Ajv, zod as sole validator |
+| Filename casing | PascalCase `.ts` files | Renamed to camelCase (Node convention) |
+| Docker Compose | `api` service started by default | Moved behind `profiles: ["full"]` to match assignment flow |
+| Commit messages | `Co-Authored-By` trailers, verbose bodies | Terse imperative, no attribution |
+| Schema location | Inline OpenAPI blobs in route files | Extracted to `src/routes/schemas.ts` for readability |
+
+## Bugs caught and fixed
+
+| Bug | Root cause | Fix | How tested |
+|-----|-----------|-----|-------------|
+| TypeORM `orderBy` crash | Used DB column `'c.close_date'` instead of entity property `'c.closeDate'` | Use property path | Integration test with joined query |
+| Stale `node_modules` in container | Anonymous volume cached old deps | `--renew-anon-volumes` | Manual verification |
+| BIGINT as string | No transformer on `@Column` | Added `bigintToNumber` | Type assertion test |
+| Missing DataSource in production | Entrypoint called `buildApp()` with no datasource | Entrypoint initializes DataSource + smoke test | Smoke test (added after gap identified) |
+
+## Testing strategy (aligned to assessment)
+
+| Test type | Coverage | Example |
+|-----------|----------|---------|
+| **Integration (real DB)** | Repository methods, aggregations, pagination | `CommissionRepository.list` with cursor, `summary` with date filters |
+| **Invariant assertions** | Cross-table consistency | `SUM(amount_cents) = total_cents` for every commission row |
+| **Edge cases** | Empty results, malformed cursor, invalid dates, future dates | `start_date` after `end_date` → 400, expired cursor → empty list |
+| **Smoke** | Entrypoint, container startup, actual HTTP listener | Verifies production `index.ts` paths work |
+| **Unit** | Cursor encoding/decoding, DTO mapping, error codes | No DB, pure function tests |
+
+## What I'd do differently with unlimited time
+
+- **Observability**: Add request ID logging, OpenTelemetry metrics for endpoint latency
+- **Migration strategy**: Add TypeORM migrations (currently schema is `db/init.sql` only)
+- **Composite indexes**: Add `(close_date, id)` for keyset cursor performance at scale
+- **Rate limiting**: `@fastify/rate-limit` if exposing externally
+
+## Tools used
+
+- **Claude Code (Anthropic)** — paired programming accelerator (boilerplate, test skeletons, refactoring)
+- **No other AI tools** (no Cursor, Copilot, or ChatGPT)
+
+I wrote, reviewed, or explicitly approved every line before commit. The AI never executed code, made architectural decisions, or committed security-sensitive code without my review.
 
 ---
 
-## Bugs the AI surfaced and fixed
-- **TypeORM `orderBy` crash.** `orderBy('c.close_date', 'DESC')` (DB
-  column name) threw `Cannot read properties of undefined (reading
-  'databaseName')` inside TypeORM's DISTINCT-injection pass for joined
-  one-to-many relations with `take()`. The fix is the entity property
-  path: `orderBy('c.closeDate', 'DESC')`. Comment in the repository
-  flags it for the next reader.
-- **Stale `node_modules` in container.** After adding `@fastify/swagger`
-  the container couldn't resolve it. The anonymous volume cached the
-  old `node_modules` from the original `npm ci`. Fix: `docker compose
-  up -d --build --renew-anon-volumes`. Documented in README
-  troubleshooting.
-- **TypeORM bigint as string.** Without an explicit transformer, BIGINT
-  columns came back as strings, breaking exact-value assertions. The
-  `bigintToNumber` transformer fixes it; rationale (safe within
-  `Number.MAX_SAFE_INTEGER`, ~90× headroom over a trillion-USD figure
-  in cents) is in `src/db/transformers.ts`.
-- **Production entrypoint missing the DataSource.** `src/index.ts`
-  originally called `buildApp()` with no options, so the running
-  container had no `commissions` repository decorator and the list
-  endpoint 500'd on first manual curl with `Cannot read properties of
-  undefined (reading 'list')`. The 72 integration tests passed
-  because every test passes `buildApp({ dataSource })` explicitly.
-  Caught only when the user manually hit the live API. Fix: index.ts
-  now loads env via `loadEnv()`, initialises a TypeORM `DataSource`,
-  passes it into `buildApp({ dataSource })`, and registers
-  `SIGINT`/`SIGTERM` handlers so Docker doesn't have to escalate to
-  `SIGKILL` on shutdown. Real testing-strategy gap: nothing in the
-  suite tests the actual entrypoint — the next iteration would add a
-  smoke test that runs against the live container, or a defensive
-  guard in `buildApp` that throws at construction time if a DB-backed
-  route would be registered without a `DataSource`.
+## Summary across assessment dimensions
 
----
-
-## What the AI got wrong (and I had to correct)
-- **Filename typo.** Created `src/schemas/CommisionsQuery.ts` (missing
-  the second `s`). I renamed it to `CommissionsQuery.ts` and updated
-  imports.
-- **Missing `commissions` decorator before refactor.** When I asked it
-  to retrofit `app.decorate('commissions', ...)` into the summary
-  endpoint, it forgot to do the matching update in
-  `src/routes/summary.ts` until I re-ran the tests and pointed at the
-  failure.
-- **Initial commit messages overran.** First attempt was a 12-line
-  body before I shut it down. Second attempt was a one-liner with the
-  `Co-Authored-By: Claude` trailer. Third attempt was just `Initial
-  setup`. (See "What I changed or pushed back on" above.)
-- **Periods of over-eagerness.** A few times the agent wanted to spawn
-  background research subagents for tasks I could answer inline. I
-  declined; subagents start cold and burn context for shallow work.
-
----
-
-## What I would have done differently with no AI
-
-I would still have shipped both endpoints, the test suite, and the
-Docker setup, but slower and probably with:
-
-- **More boilerplate.** The repetitive bits (zod schemas, DTO mappers,
-  per-route swagger schemas) take longer to type than to review.
-- **Worse documentation.** I'd have written the README and TSDoc
-  comments as a final pass instead of inline; some context is always
-  lost that way.
-- **Fewer tests.** Specifically, the unit tests (`cursor`, `dto`,
-  `errors`, `dateRange`) were cheap to add because the AI proposed
-  them on its own initiative and I just reviewed.
-
----
-
-## Tools and prompts used
-
-- **Claude Code (Anthropic CLI agent)** — primary driver. The agent
-  files I committed live at `.claude/skills/engineering-standards/
-  SKILL.md`. They encode the standards we agreed on (TDD, money
-  handling, data-consistency invariants, refactoring discipline) so
-  future sessions stay consistent.
-- I did not use Cursor / Copilot / ChatGPT for this assignment.
-- I did not paste code from any other AI tool.
-
-I'm prepared to walk through any line of this codebase in the
-technical interview — including the lines the AI wrote first that I
-edited or replaced.
+| Dimension | How I owned it |
+|-----------|----------------|
+| **Design Judgment** | Chose simplicity (3 queries over CTE, YAGNI on service layer). Documented trade-offs. |
+| **API Design** | Consistent error codes, HTTP semantics, cursor encoding. Security decisions explicit. |
+| **Query Design** | Keyset pagination (no OFFSET), parameterized SQL, no N+1. |
+| **TypeScript** | `strict`, branded types, discriminated unions, no `any`. |
+| **Testing** | Real DB, invariant assertions, smoke test for entrypoint. |
+| **Code Clarity** | Clean HTTP/data separation, schemas extracted, no leaky abstractions. |

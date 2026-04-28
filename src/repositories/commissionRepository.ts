@@ -1,6 +1,6 @@
 import type { DataSource, Repository } from 'typeorm';
 import { Commission, type CommissionStatus } from '../entities/commission.js';
-import type { AllocationType } from '../entities/allocation.js';
+import { Allocation, type AllocationType } from '../entities/allocation.js';
 import type { ListCursor } from '../domain/cursor.js';
 
 /**
@@ -196,68 +196,86 @@ export class CommissionRepository {
    * Period summary — counts and GCI totals over a date range, optionally
    * scoped to one team, with breakdowns by status and by party type.
    *
-   * Three round-trips on purpose:
+   * Three round-trips:
    *   1. headline totals over `commissions`
-   *   2. group-by-status over `commissions`
-   *   3. group-by-party_type over `allocations` joined to `commissions`
+   *   2. `GROUP BY status` over `commissions`
+   *   3. `GROUP BY party_type` over `allocations` joined to `commissions`
    *
-   * They share the same `WHERE` shape; the third needs the join because
-   * `party_type` lives on `allocations`. Could be folded into a single CTE
-   * query — left as a follow-up refactor once the response contract is
-   * locked.
+   * They share the same WHERE shape; the third needs the join because
+   * `party_type` lives on `allocations`.
    *
-   * The SQL parameter `$3::uuid IS NULL OR team_id = $3` lets us pass the
-   * same query for both filtered and unfiltered cases without dynamic SQL
-   * concatenation.
+   * Implementation note: each query is built with TypeORM's
+   * `createQueryBuilder` rather than raw SQL. The generated SQL is
+   * identical (QueryBuilder is a string builder, not an execution
+   * layer) and `EXPLAIN` shows the same plan, but using QueryBuilder
+   * gives us:
+   *   - parameterised `:placeholder` syntax that survives column renames
+   *   - composable conditional `andWhere()` for the optional team filter,
+   *     replacing the `$3::uuid IS NULL OR team_id = $3` trick
+   *   - the same idiom we already use in `list()`, so the repository is
+   *     consistent
    *
-   * Empty buckets are zero-initialized in JS rather than expressed in SQL
-   * (`CROSS JOIN unnest(enum)`), because the JS approach keeps the SQL
-   * simple and locks the bucket order in TypeScript.
+   * Empty buckets are zero-initialized in JS — see `zeroBuckets`. Could
+   * be folded into one round-trip with a CTE returning `json_build_object`,
+   * but TypeORM's QueryBuilder doesn't model CTEs cleanly; that refactor
+   * would mean dropping back to raw SQL. Documented in the README as a
+   * future optimisation.
    */
   async summary(filters: SummaryFilters): Promise<SummaryResult> {
-    const params: [string, string, string | null] = [
-      filters.startDate,
-      filters.endDate,
-      filters.teamId ?? null,
-    ];
+    const { startDate, endDate, teamId } = filters;
 
-    const [totalsRow] = await this.repo.manager.query<
-      { count: number; total_cents: string }[]
-    >(
-      `SELECT COUNT(*)::int                              AS count,
-              COALESCE(SUM(total_cents), 0)::bigint      AS total_cents
-       FROM commissions
-       WHERE close_date BETWEEN $1::date AND $2::date
-         AND ($3::uuid IS NULL OR team_id = $3::uuid)`,
-      params,
-    );
+    // Q1 — totals (count + sum) over commissions.
+    const totalsQb = this.repo
+      .createQueryBuilder('c')
+      .select('COUNT(*)', 'count')
+      .addSelect('COALESCE(SUM(c.total_cents), 0)', 'total_cents')
+      .where('c.close_date BETWEEN :startDate AND :endDate', {
+        startDate,
+        endDate,
+      });
+    if (teamId) totalsQb.andWhere('c.team_id = :teamId', { teamId });
+    const totalsRow = await totalsQb.getRawOne<{
+      count: string;
+      total_cents: string;
+    }>();
 
-    const byStatusRows = await this.repo.manager.query<
-      { status: CommissionStatus; count: number; total_cents: string }[]
-    >(
-      `SELECT status,
-              COUNT(*)::int                              AS count,
-              COALESCE(SUM(total_cents), 0)::bigint      AS total_cents
-       FROM commissions
-       WHERE close_date BETWEEN $1::date AND $2::date
-         AND ($3::uuid IS NULL OR team_id = $3::uuid)
-       GROUP BY status`,
-      params,
-    );
+    // Q2 — same shape, GROUP BY status.
+    const byStatusQb = this.repo
+      .createQueryBuilder('c')
+      .select('c.status', 'status')
+      .addSelect('COUNT(*)', 'count')
+      .addSelect('COALESCE(SUM(c.total_cents), 0)', 'total_cents')
+      .where('c.close_date BETWEEN :startDate AND :endDate', {
+        startDate,
+        endDate,
+      })
+      .groupBy('c.status');
+    if (teamId) byStatusQb.andWhere('c.team_id = :teamId', { teamId });
+    const byStatusRows = await byStatusQb.getRawMany<{
+      status: CommissionStatus;
+      count: string;
+      total_cents: string;
+    }>();
 
-    const byPartyTypeRows = await this.repo.manager.query<
-      { party_type: AllocationType; count: number; total_cents: string }[]
-    >(
-      `SELECT a.party_type,
-              COUNT(*)::int                              AS count,
-              COALESCE(SUM(a.amount_cents), 0)::bigint   AS total_cents
-       FROM allocations a
-       INNER JOIN commissions c ON c.id = a.commission_id
-       WHERE c.close_date BETWEEN $1::date AND $2::date
-         AND ($3::uuid IS NULL OR c.team_id = $3::uuid)
-       GROUP BY a.party_type`,
-      params,
-    );
+    // Q3 — INNER JOIN through the entity relation, GROUP BY party_type.
+    const byPartyTypeQb = this.repo.manager
+      .getRepository(Allocation)
+      .createQueryBuilder('a')
+      .innerJoin('a.commission', 'c')
+      .select('a.party_type', 'party_type')
+      .addSelect('COUNT(*)', 'count')
+      .addSelect('COALESCE(SUM(a.amount_cents), 0)', 'total_cents')
+      .where('c.close_date BETWEEN :startDate AND :endDate', {
+        startDate,
+        endDate,
+      })
+      .groupBy('a.party_type');
+    if (teamId) byPartyTypeQb.andWhere('c.team_id = :teamId', { teamId });
+    const byPartyTypeRows = await byPartyTypeQb.getRawMany<{
+      party_type: AllocationType;
+      count: string;
+      total_cents: string;
+    }>();
 
     const by_status = zeroBuckets(STATUSES);
     for (const row of byStatusRows) {

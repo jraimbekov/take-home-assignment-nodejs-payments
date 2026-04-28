@@ -6,7 +6,7 @@ PostgreSQL database of commissions and allocations. See
 
 > **Status:** both required endpoints shipped — `GET /api/v1/commissions`
 > (paginated list with allocations) and `GET /api/v1/commissions/summary`
-> (period summary aggregates). 72 tests, typecheck clean.
+> (period summary aggregates). 77 tests (44 integration + 28 unit + 5 smoke), typecheck clean.
 
 ---
 
@@ -312,6 +312,7 @@ test/
     db.test.ts                     # DataSource + entity wiring + invariant
     commissionRepository.test.ts
     indexes.test.ts                # pg_indexes + EXPLAIN plan check
+    smoke.test.ts                  # 5 tests: entrypoint integration
     api/
       commissions.test.ts          # 15 tests: filters, pagination, errors
       summary.test.ts              # 12 tests: happy + zero-fill + errors
@@ -323,7 +324,7 @@ test/
     dateRange.test.ts              # 365-day cap, inverted range
 ```
 
-Counts at HEAD: **72 total** (44 integration, 28 unit), exact-value
+Counts at HEAD: **77 total** (49 integration, 28 unit), exact-value
 assertions throughout against the evaluator reference totals seeded in
 `db/init.sql`.
 
@@ -331,7 +332,11 @@ Integration tests connect to a real Postgres — no mocking of the DB layer
 or the ORM. The fixture is the canonical seed; we don't shuffle data
 per-test. Cross-table invariants (`SUM(allocations.amount_cents) =
 commissions.total_cents`) are asserted in both the DB layer test and the
-list endpoint test, catching drift either way.
+list endpoint test, catching drift either way. The smoke test
+(`test/integration/smoke.test.ts`) validates end-to-end that the actual
+entrypoint (`src/index.ts`) can initialize a DataSource and register
+all routes — catches issues like missing decorators that integration
+tests via `app.inject()` might miss.
 
 ---
 
@@ -390,8 +395,6 @@ volume is stale after a dependency change. Run `docker compose up -d
 
 ## What I'd do with more time
 
-- **Single-CTE summary query.** Three round-trips are clear but suboptimal
-  on a slow DB; one CTE returning JSON would halve latency.
 - **OpenAPI spec from zod.** `fastify-type-provider-zod` would derive
   the swagger spec from a single source instead of maintaining two
   schema definitions per endpoint. Higher upfront cost, lower drift
